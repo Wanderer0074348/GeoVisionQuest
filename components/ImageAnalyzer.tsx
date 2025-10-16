@@ -20,6 +20,7 @@ export default function ImageAnalyzer({ candidate, onClose }: ImageAnalyzerProps
     if (candidate) {
       fetchSatelliteImage();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidate]);
 
   const fetchSatelliteImage = async () => {

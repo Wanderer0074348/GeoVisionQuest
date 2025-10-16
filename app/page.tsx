@@ -38,7 +38,7 @@ export default function Home() {
           setCandidates(results.data);
           setLoading(false);
         },
-        error: (error) => {
+        error: (error: Error) => {
           console.error('Error parsing CSV:', error);
           setLoading(false);
         },
@@ -112,7 +112,7 @@ export default function Home() {
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-400 mr-2">3.</span>
-                    Click "Analyze with OpenAI" to detect archaeological features
+                    Click &quot;Analyze with OpenAI&quot; to detect archaeological features
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-400 mr-2">4.</span>
