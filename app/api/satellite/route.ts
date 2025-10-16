@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ee from '@google/earthengine';
+import { google } from 'googleapis';
 
-let eeInitialized = false;
-
-async function initializeEE() {
-  if (eeInitialized) return;
-
+async function getAccessToken() {
   const serviceAccount = process.env.GEE_SERVICE_ACCOUNT;
   const privateKey = process.env.GEE_PRIVATE_KEY;
 
@@ -13,40 +9,23 @@ async function initializeEE() {
     throw new Error('Google Earth Engine credentials not configured');
   }
 
-  // Replace escaped newlines in the private key
   const formattedKey = privateKey.replace(/\\n/g, '\n');
 
-  return new Promise<void>((resolve, reject) => {
-    ee.data.authenticateViaPrivateKey(
-      {
-        client_email: serviceAccount,
-        private_key: formattedKey,
-      },
-      () => {
-        ee.initialize(
-          null,
-          null,
-          () => {
-            eeInitialized = true;
-            resolve();
-          },
-          (error: Error) => {
-            reject(error);
-          }
-        );
-      },
-      (error: Error) => {
-        reject(error);
-      }
-    );
+  const jwtClient = new google.auth.JWT({
+    email: serviceAccount,
+    key: formattedKey,
+    scopes: ['https://www.googleapis.com/auth/earthengine.readonly'],
   });
+
+  const tokens = await jwtClient.authorize();
+  return tokens.access_token;
 }
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const lat = searchParams.get('lat');
   const lon = searchParams.get('lon');
-  const buffer = searchParams.get('buffer') || '500'; // Buffer in meters
+  const buffer = searchParams.get('buffer') || '500';
 
   if (!lat || !lon) {
     return NextResponse.json(
@@ -56,44 +35,135 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    await initializeEE();
-
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lon);
     const bufferMeters = parseFloat(buffer);
 
-    // Create point geometry
-    const point = ee.Geometry.Point([longitude, latitude]);
+    // Get access token
+    const accessToken = await getAccessToken();
 
-    // Get Sentinel-2 imagery (similar to the notebook code)
-    const collection = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-      .filterBounds(point)
-      .filterDate('2023-01-01', '2024-12-31')
-      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
-      .sort('system:time_start', false);
+    // Calculate bounds for the region
+    const metersPerDegree = 111320; // Approximate meters per degree at equator
+    const latOffset = bufferMeters / metersPerDegree;
+    const lonOffset = bufferMeters / (metersPerDegree * Math.cos((latitude * Math.PI) / 180));
 
-    const image = collection.first();
+    // Build Earth Engine expression for Sentinel-2 imagery
+    const eeExpression = {
+      expression: {
+        functionInvocationValue: {
+          functionName: 'Image.visualize',
+          arguments: {
+            image: {
+              functionInvocationValue: {
+                functionName: 'Collection.first',
+                arguments: {
+                  collection: {
+                    functionInvocationValue: {
+                      functionName: 'Collection.sort',
+                      arguments: {
+                        collection: {
+                          functionInvocationValue: {
+                            functionName: 'Collection.filter',
+                            arguments: {
+                              collection: {
+                                functionInvocationValue: {
+                                  functionName: 'Collection.filterDate',
+                                  arguments: {
+                                    collection: {
+                                      functionInvocationValue: {
+                                        functionName: 'Collection.filterBounds',
+                                        arguments: {
+                                          collection: {
+                                            functionInvocationValue: {
+                                              functionName: 'ImageCollection.load',
+                                              arguments: {
+                                                id: { constantValue: 'COPERNICUS/S2_SR_HARMONIZED' },
+                                              },
+                                            },
+                                          },
+                                          geometry: {
+                                            functionInvocationValue: {
+                                              functionName: 'GeometryConstructors.Point',
+                                              arguments: {
+                                                coordinates: {
+                                                  constantValue: [longitude, latitude],
+                                                },
+                                              },
+                                            },
+                                          },
+                                        },
+                                      },
+                                    },
+                                    start: { constantValue: '2023-01-01' },
+                                    end: { constantValue: '2024-12-31' },
+                                  },
+                                },
+                              },
+                              filter: {
+                                functionInvocationValue: {
+                                  functionName: 'Filter.lt',
+                                  arguments: {
+                                    leftField: { constantValue: 'CLOUDY_PIXEL_PERCENTAGE' },
+                                    rightValue: { constantValue: 20 },
+                                  },
+                                },
+                              },
+                            },
+                          },
+                        },
+                        key: { constantValue: 'system:time_start' },
+                        ascending: { constantValue: false },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            bands: { constantValue: ['B4', 'B3', 'B2'] },
+            min: { constantValue: 0 },
+            max: { constantValue: 3000 },
+          },
+        },
+      },
+    };
 
-    // Create thumbnail URL
-    const region = point.buffer(bufferMeters).bounds();
+    // Get thumbnail from Earth Engine
+    const eeResponse = await fetch(
+      'https://earthengine.googleapis.com/v1/projects/earthengine-public/thumbnails:getPixels',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          expression: eeExpression,
+          fileFormat: 'PNG',
+          grid: {
+            dimensions: {
+              width: 512,
+              height: 512,
+            },
+            affineTransform: {
+              scaleX: (lonOffset * 2) / 512,
+              shearX: 0,
+              translateX: longitude - lonOffset,
+              shearY: 0,
+              scaleY: -(latOffset * 2) / 512,
+              translateY: latitude + latOffset,
+            },
+            crsCode: 'EPSG:4326',
+          },
+        }),
+      }
+    );
 
-    const thumbUrl = image.getThumbURL({
-      region: region.getInfo().coordinates,
-      dimensions: 512,
-      format: 'png',
-      min: 0,
-      max: 3000,
-      bands: ['B4', 'B3', 'B2'], // RGB bands for true color
-    });
-
-    // Fetch the image from GEE
-    const response = await fetch(thumbUrl);
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image from GEE: ${response.statusText}`);
+    if (!eeResponse.ok) {
+      const errorText = await eeResponse.text();
+      throw new Error(`Earth Engine API error: ${errorText}`);
     }
 
-    const imageBuffer = await response.arrayBuffer();
+    const imageBuffer = await eeResponse.arrayBuffer();
     const base64Image = Buffer.from(imageBuffer).toString('base64');
 
     return NextResponse.json({
@@ -106,7 +176,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         error: 'Failed to fetch satellite imagery from Google Earth Engine',
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }
     );
