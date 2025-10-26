@@ -108,7 +108,7 @@ export default function Home() {
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-400 mr-2">2.</span>
-                    Satellite imagery will be loaded from Google Earth Engine (Sentinel-2)
+                    Satellite imagery will be loaded from Google Maps
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-400 mr-2">3.</span>
@@ -135,7 +135,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="bg-gray-900 border-t border-gray-800 px-6 py-3 text-center text-xs text-gray-500">
-        Powered by OpenStreetMap, Google Earth Engine (Sentinel-2), and OpenAI GPT-4 Vision
+        Powered by OpenStreetMap, Google Maps Satellite, and OpenAI GPT-4 Vision
       </footer>
     </div>
   );
